@@ -377,6 +377,7 @@ while running:
     # - Now Playing Bar -
     pygame.draw.rect(screen, black, playerOverviewBar)
     pygame.draw.rect(screen, secondaryColour, playerOverviewBarDividerLine)
+    # TODO: Add playback controls, song info, and progress bar here
     
     # Updating window title every frame
     windowTitle = f"OpenStreamer {version} - {currentPage}"
