@@ -2,7 +2,7 @@
 The client app for OpenStreamer.
 
 ### What even is OpenStreamer?
-It's the only music app that gets better at playing songs, the more songs people play! This is due to the "definitive version" system, which makes users choose the best upload of a song. Your choice then gets sent to a database, so others will not be asked again for that song!
+It's the only music app that gets better at playing songs, the more songs people play! This is due to the "definitive version" system, which makes users choose the best upload of a song. Your choice then gets sent to a database, so nobody will not be asked again for that song!
 
 ## Currently Working
 - Searching (results print to command line)
