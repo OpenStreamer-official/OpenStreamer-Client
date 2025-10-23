@@ -6,7 +6,7 @@ import os
 import json
 import requests
 
-version = "v1.0.0-prerelease001"
+version = "v1.0.0-prerelease002"
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -32,6 +32,8 @@ Clock = pygame.time.Clock()
 
 # - UI -
 currentPage = "Home"
+hasSearched = 0
+wheel_counter = 0
 
 # TODO: Convert UI Managers to a dictionary for cleaner code later
 homeUiManager = pygame_gui.UIManager((w, h))
@@ -64,6 +66,14 @@ names = {}
 artists = {}
 ISRCs = {}
 lengths = {}
+IDs = {}
+coverArts = {}
+explicits = {}
+lyrics = {}
+
+# Cover Art Displays
+loadedArt = {}
+loadedArtRect = {}
 
 # --- FONTS ---
 Roboto_Bold = pygame.font.Font(script_dir + "/assets/fonts/Roboto-Bold.ttf", 48)
@@ -72,6 +82,7 @@ Roboto_Regular = pygame.font.Font(script_dir + "/assets/fonts/Roboto-Regular.ttf
 
 # --- ARBITRARY FONTS ---
 RobotoForSearchBarHomePage = pygame.font.Font(script_dir + "/assets/fonts/Roboto-Medium.ttf", 20) # Font for homepage search box
+RobotoSubtitleSmall1 = pygame.font.Font(script_dir + "/assets/fonts/Roboto-Regular.ttf", 18)
 
 # --- IMAGES ---
 
@@ -124,6 +135,11 @@ userRect.center = (w // 2) + 128, 48
 searchBarHomePage = pygame.image.load(script_dir + "/assets/searchBarHomePage.png")
 searchBarHomePageInactive = pygame.image.load(script_dir + "/assets/searchBarHomePageInactive.png")
 
+# Explicit Marker
+explicitMarker = pygame.image.load(script_dir + "/assets/fonts/explicit.svg")
+explicitMarker = pygame.transform.smoothscale(explicitMarker, (18, 18)).convert_alpha()
+explicitMarkerRect = explicitMarker.get_rect()
+
 # --- Search Bars ---
 nameSearchBarHomePageRect = pygame.Rect(128, 225, 1024, 36)
 artistSearchBarHomePageRect = pygame.Rect(128, 325, 1024, 36)
@@ -133,6 +149,9 @@ playerOverviewBar = pygame.Rect(0, 600, 1280, 120)
 playerOverviewBarDividerLine = pygame.Rect(0, 595, 1280, 5)
 
 searchButtonHomePage = pygame.Rect(540, 400, 200, 48)
+
+navBar = pygame.Rect(0, 0, 1280, 96)
+searchPageNavBarExtension = pygame.Rect(0, 0, 1280, 192)
 
 # --- UI ELEMENTS ---
 
@@ -145,7 +164,7 @@ textboxes["homePageArtistSearchBox"] = pygame_gui.elements.UITextEntryBox(relati
 artistSearchBarHomePageFocused = 0
 
 # --- FUNCTIONS ---
-def searchForAudioChoiceData(query, amount): # Gets the top 5 versions of a song for the definitive version system
+def searchForAudioChoiceData(query, amount): # Gets the top versions of a song for the definitive version system
     with YoutubeDL(YDL_OPTIONS_LIST_DEFINITIVE) as ydl:
         result = ydl.extract_info(f"ytsearch{amount}:{query}", download=False)
 
@@ -165,11 +184,104 @@ def searchForAudioChoiceData(query, amount): # Gets the top 5 versions of a song
 
     return topResults
 
-def listSearchChoiceDataInShell(): # Takes results of searchForAudioChoiceData and lists them in the command line
-    data = searchForAudioChoiceData("the big goodbye ajr", 5)
+def listSearchChoiceDataInShell(name, artist, length): # Takes results of searchForAudioChoiceData and lists them in the command line
+    data = searchForAudioChoiceData(f"{name} {artist}", length)
     for i, video in enumerate(data, 1):
         print(f"{i}. {video['title']} by {video['channel']} ({video['length']}s)")
         print(f"URL: {video['url']}\n")
+
+def getLyrics(name, artist):
+    url = f"https://lrclib.net/api/search?track_name={name}&artist_name={artist}"
+
+    if os.path.isfile(script_dir + f'/OpenStreamer/Library/lyrics/{artist} - {name}.oslyc'):
+        pass
+        print(f"[INFO] '{artist} - {name}.oslyc' already exists.")
+    else:
+        headers = {"User-Agent": f"OpenStreamer/{version} (imaginegameservice@gmail.com)","Accept": "application/json"} # Headers
+        response = requests.get(url, headers=headers)
+        try:
+            data = response.content
+            data = json.loads(data)
+        except:
+            print("[ERROR] Failed to decode JSON of lyric array")
+
+        try:
+            tempLyrics = data[0]["syncedLyrics"] # Parse JSON for synced lyrics
+            lyricSave = 1 # Makes sure the lyrics save
+            if not tempLyrics:
+                tempLyrics = data[0]["plainLyrics"] # Parse JSON for plain lyrics
+                lyricSave = 1 # Makes sure the lyrics save
+            if not tempLyrics:
+                lyricSave = 0 # Makes sure the lyrics don't save
+        except:
+            print(f"[ERROR] Failed to get the lyrics for {artist} - {name}")
+            lyricSave = 0
+
+        os.makedirs(script_dir + f'/OpenStreamer/Library/lyrics/', exist_ok=True)
+        try:
+            if lyricSave == 1:
+                with open(script_dir + f'/OpenStreamer/Library/lyrics/{artist} - {name}.oslyc', 'w') as fp:
+                    fp.write(tempLyrics)
+                    print(f"[INFO] Successfully saved {artist} - {name}.oslyc.") 
+            else:
+                print(f"[INFO] {artist} - {name} had no lyrics.")
+        except:
+            print(f"[ERROR] Failed to save {artist} - {name}.oslyc. Content was malformed. Data:")
+            print(tempLyrics)
+
+def getCoverArt(release_id):
+    url = f"http://coverartarchive.org/release/{release_id}" # Endpoint
+
+    savingImage = 1 # Default save option
+
+    if os.path.isfile(script_dir + f'/OpenStreamer/Library/cover-art/{release_id}.jpg'):
+        pass
+    else:
+        headers = {"User-Agent": f"OpenStreamer/{version} (imaginegameservice@gmail.com)"} # User-Agent
+
+        try:
+            response = requests.get(url, headers=headers)
+        except:
+            try:
+                response = requests.get(url, headers=headers)
+            except:
+                print("[ERROR] Failed to get cover art info multiple times")
+                savingImage = 0 # Discard failed downloads
+
+        try:
+            data = response.json()
+        except:
+            print("[ERROR] Failed to decode JSON of cover art info")
+
+        try:
+            tempCoverArt = data.get("images", [])[-1].get("image") # Parse JSON
+            savingImage = 1 # Save successful downloads
+        except:
+            savingImage = 0 # Discard failed downloads
+            print(f"[ERROR] Failed to get the cover art for {release_id}")
+    
+    # Get image file
+    if os.path.isfile(script_dir + f'/OpenStreamer/Library/cover-art/{release_id}.jpg'):
+        pass
+    else:
+        try:
+            url = tempCoverArt
+            response = requests.get(url)
+        except:
+            print("[ERROR] Failed to download image.")
+            savingImage = 0 # Discard failed downloads
+
+    os.makedirs(script_dir + f'/OpenStreamer/Library/cover-art/', exist_ok=True)
+    if savingImage == 1:
+        try:
+            with open(script_dir + f'/OpenStreamer/Library/cover-art/{release_id}.jpg', 'wb') as fp:
+                fp.write(response.content)
+        except:
+            return script_dir + f'/assets/failedCover.jpg'
+
+        return script_dir + f'/OpenStreamer/Library/cover-art/{release_id}.jpg'
+    else:
+        return script_dir + f'/assets/failedCover.jpg'
 
 def searchSongs(name, artist): # Gets song results from MusicBrainz
     global names, artists, ISRCs, lengths
@@ -179,6 +291,10 @@ def searchSongs(name, artist): # Gets song results from MusicBrainz
     artists.clear()
     ISRCs.clear()
     lengths.clear()
+    IDs.clear()
+    coverArts.clear()
+    explicits.clear()
+    lyrics.clear()
     
     url = "https://musicbrainz.org/ws/2/recording" # MusicBrainz API endpoint
     if artist == "":
@@ -194,20 +310,45 @@ def searchSongs(name, artist): # Gets song results from MusicBrainz
             "limit": 10,
             "fmt": "json"
         }
-        print(f"[INFO] Searching for {name} with {artist}")
+        print(f"[INFO] Searching for {name} with {artist} as artist")
     
     headers = {"User-Agent": f"OpenStreamer/{version} (imaginegameservice@gmail.com)"} # User-Agent is required by MusicBrainz
     
-    response = requests.get(url, params=params, headers=headers)
-    data = response.json()
+    try:
+        response = requests.get(url, params=params, headers=headers)
+    except:
+        print("[ERROR] Failed to get song info")
+
+    try:
+        data = response.json()
+    except:
+        print("[ERROR] Failed to decode JSON of song info")
     
     for i, rec in enumerate(data.get("recordings", []), start=1): # Fills dictionaries with fetched info
         names[i] = rec.get("title", "")
         artists[i] = rec.get("artist-credit", [{}])[0].get("name", "")
         ISRCs[i] = rec.get("isrcs", [None])[0] if rec.get("isrcs") else None
         lengths[i] = rec.get("length", None)
-        lengths[i] = round(lengths[i] / 1000) # Milliseconds to seconds
+        try:
+            lengths[i] = round(lengths[i] / 1000) # Milliseconds to seconds
+        except:
+            print("[ERROR] Error converting time to seconds - kept as milliseconds")
+        try:
+            IDs[i] = rec.get("releases", [])[-1].get("id")
+        except:
+            IDs[i] = rec.get("id")
+        coverArts[i] = getCoverArt(IDs[i])
+        explicits[i] = rec.get("disambiguation", "")
+        lyrics[i] = getLyrics(names[i], artists[i])
 
+def searchQueryOverviewTitle():
+    # Search Query Overview Title
+    tempSongName = textboxes["homePageNameSearchBox"].get_text()
+    tempSongArtist = textboxes["homePageArtistSearchBox"].get_text()
+    queuedText = f"""Search results for "{tempSongName}" by "{tempSongArtist}":"""
+    queuedText_size = pygame.font.Font.size(Roboto_Bold, queuedText)
+    text = Roboto_Bold.render(queuedText, True, primaryTextColour)
+    screen.blit(text, (w // 2 - (queuedText_size[0] / 2), 100))
 
 # --- PAGES ---
 def homePage():
@@ -290,9 +431,90 @@ def libraryPage():
 def userPage():
     pass
 
+def searchResultsPage():
+    global hasSearched, textboxes, wheel_counter
+
+    if hasSearched == 1:
+        #  Search Query Temp Title
+        queuedText = f"""Searching..."""
+        queuedText_size = pygame.font.Font.size(Roboto_Bold, queuedText)
+        text = Roboto_Bold.render(queuedText, True, primaryTextColour)
+        screen.blit(text, (w // 2 - (queuedText_size[0] / 2), 100))
+
+        # Searching
+        searchSongs(textboxes["homePageNameSearchBox"].get_text(), textboxes["homePageArtistSearchBox"].get_text())
+
+        hasSearched = 0
+
+    searchSize = len(names)
+    for i in range(searchSize):
+        api_idx = i + 1
+        # Name Rendering
+        queuedText = names[api_idx]
+        queuedText_size = pygame.font.Font.size(Roboto_Regular, queuedText)
+        text = Roboto_Regular.render(queuedText, True, primaryTextColour)
+        screen.blit(text, (272, (96 * i) + (200 + wheel_counter * accelaration)))
+        api_idx = i + 1
+        # Artist + Length Rendering
+        try:
+            tempMinutes = lengths[api_idx] // 60 # minutes calc
+            tempSeconds = lengths[api_idx] - (tempMinutes * 60) # seconds calc
+        except:
+            tempMinutes = "Error converting from seconds to MM:SS."
+            tempSeconds = ""
+        if len(str(tempSeconds)) == 1: # makes seconds always 2 digit
+            tempSeconds = f"0{tempSeconds}"
+        queuedText = f"{artists[api_idx]} – {tempMinutes}:{tempSeconds}"
+        queuedText_size = pygame.font.Font.size(RobotoSubtitleSmall1, queuedText)
+        text = RobotoSubtitleSmall1.render(queuedText, True, secondaryTextColour)
+        if explicits[api_idx] == "explicit":
+            screen.blit(text, (296, (96 * i) + (232 + wheel_counter * accelaration)))
+        else:
+            screen.blit(text, (272, (96 * i) + (232 + wheel_counter * accelaration)))
+        # Image Loading + Rendering
+        try:
+            if loadedArt[IDs[api_idx]] == None:
+                pass
+        except:
+            try:
+                loadedArt[IDs[api_idx]] = pygame.image.load(coverArts[api_idx])
+            except:
+                loadedArt[IDs[api_idx]] = pygame.image.load(script_dir + f'/assets/failedCover.jpg')
+            loadedArt[IDs[api_idx]] = pygame.transform.smoothscale(loadedArt[IDs[api_idx]], (72, 72)).convert()
+            loadedArtRect[IDs[api_idx]] = loadedArt[IDs[api_idx]].get_rect()
+        loadedArtRect[IDs[api_idx]].center = (230, (96 * i) + (230 + wheel_counter * accelaration))
+        screen.blit(loadedArt[IDs[api_idx]], loadedArtRect[IDs[api_idx]])
+        # Explicit Mark Rendering
+        if explicits[api_idx] == "explicit":
+            explicitMarkerRect = pygame.Rect(273, (96 * i) + (233 + wheel_counter * accelaration), 20, 20)
+            screen.blit(explicitMarker, explicitMarkerRect)
+        else:
+            tempEmark = ""
+        
+    # Scrolling Limits
+    if searchSize >= 4:
+        scroll_target = 0 - (((96 * searchSize) + 120) / 2)
+    else:
+        scroll_target = 0
+    if wheel_counter < scroll_target:
+        wheel_counter = scroll_target
+    if wheel_counter > 0:
+        wheel_counter = 0
+
+    # Search Results Mouse Events
+    mouse_pos = pygame.mouse.get_pos()
+    if logoRect.collidepoint(mouse_pos): # Detect logo click
+        if isMouseDown:
+            currentPage = "Home"
+            wheel_counter = 0
+
 # --- MAIN LOOP ---
 running = True
 while running:
+    if hasSearched == 1:
+        currentPage = "Search Results"
+        wheel_counter = 0
+
     screen.fill(bgColour)
     time_delta = Clock.tick(60)/1000.0 # Delta Time
     
@@ -322,57 +544,83 @@ while running:
                 restrictInputs = 0
         else:
                 restrictInputs = 0
+
+        if event.type == pygame.MOUSEWHEEL:
+            wheel_counter += event.y * 3
+            wheel_change += event.y * 3
         
         if restrictInputs != 1: # Blocks inputs when enter key detected to block newlines in one-line textboxes
             homeUiManager.process_events(event)
             libraryUiManager.process_events(event)
             userUiManager.process_events(event)
 
+    highlightButton = ""
+
     # - Mouse Events -
     mouse_pos = pygame.mouse.get_pos()
     if logoRect.collidepoint(mouse_pos): # Detect logo click
         if isMouseDown:
             currentPage = "Home"
+            wheel_counter = 0
     if houseRect.collidepoint(mouse_pos): # Detect home click
         if isMouseDown:
             currentPage = "Home"
+            wheel_counter = 0
         else:
-            pygame.draw.rect(screen, primaryColour, houseRect, border_radius=10) # Home hover effect
+            highlightButton = "Home"
     if libraryRect.collidepoint(mouse_pos): # Detect library click
         if isMouseDown:
             currentPage = "Library"
+            wheel_counter = 0
         else:
-            pygame.draw.rect(screen, primaryColour, libraryRect, border_radius=10) # Library hover effect
+            highlightButton = "Library"
     if userRect.collidepoint(mouse_pos): # Detect user click
         if isMouseDown:
             currentPage = "User"
+            wheel_counter = 0
         else:
-            pygame.draw.rect(screen, primaryColour, userRect, border_radius=10) # User hover effect
+            highlightButton = "User"
     if searchButtonHomePage.collidepoint(mouse_pos): # Home Page Search Bar focusing
         if isMouseDown:
-            searchSongs(textboxes["homePageNameSearchBox"].get_text(), textboxes["homePageArtistSearchBox"].get_text())
-            print(names)
-            print(artists)
-            print(ISRCs)
-            print(lengths)
+            hasSearched = 1
+            # Search Indicator Label
+            queuedText = "Searching..."
+            queuedText_size = pygame.font.Font.size(RobotoForSearchBarHomePage, queuedText)
+            text = RobotoForSearchBarHomePage.render(queuedText, True, primaryTextColour)
+            screen.blit(text, (w // 2 - (queuedText_size[0] / 2), 490))
         else:
             searchButtonHomePageActive = 1
     else:
         searchButtonHomePageActive = 0
     
-    # Nav bar rendering
-    screen.blit(logo, logoRect)
-    screen.blit(house, houseRect)
-    screen.blit(library, libraryRect)
-    screen.blit(user, userRect)
-    
-    # - Page setting -
+    # - Page functions -
     if currentPage == "Home":
         homePage()
     if currentPage == "Library":
         libraryPage()
     if currentPage == "User":
         userPage()
+    if currentPage == "Search Results":
+        searchResultsPage()
+        pygame.draw.rect(screen, bgColour, searchPageNavBarExtension) # Search results independent nav bar BG
+        searchQueryOverviewTitle() # Search results heading
+
+    # Nav Bar BG Rendering
+    pygame.draw.rect(screen, bgColour, navBar)
+
+    # Highlighting Nav Bar Buttons
+    if highlightButton == "Home":
+        pygame.draw.rect(screen, primaryColour, houseRect, border_radius=10) # Home hover effect
+    if highlightButton == "Library":
+        pygame.draw.rect(screen, primaryColour, libraryRect, border_radius=10) # Library hover effect
+    if highlightButton == "User":
+        pygame.draw.rect(screen, primaryColour, userRect, border_radius=10) # User hover effect
+
+    # Nav Bar Icon Rendering
+    screen.blit(logo, logoRect)
+    screen.blit(house, houseRect)
+    screen.blit(library, libraryRect)
+    screen.blit(user, userRect)
     
     # - Now Playing Bar -
     pygame.draw.rect(screen, black, playerOverviewBar)
@@ -403,5 +651,11 @@ while running:
     if totalTicks == 30:
         totalTicks = 0
     totalTicks += 1
+
+    wheel_change = 0
+    if wheel_counter == 0:
+        accelaration = 1.0
+    else:
+        accelaration = (wheel_change * 0.05) + 1.0
 
 pygame.quit() # make it stop
